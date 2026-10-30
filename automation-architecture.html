@@ -1,0 +1,170 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Timesheet Bot Architecture</title><style>:root{--bg:#F6F7F9;--ink:#1F2933;--mut:#52606D;--line:#9AA5B1;--box:#FFFFFF;--acc:#0F766E;--accsoft:#D5EFEC}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#12171C;--ink:#E6EAEE;--mut:#AEB8C2;--line:#667380;--box:#1C242C;--acc:#2DD4BF;--accsoft:#134E4A}}
+:root[data-theme=dark]{--bg:#12171C;--ink:#E6EAEE;--mut:#AEB8C2;--line:#667380;--box:#1C242C;--acc:#2DD4BF;--accsoft:#134E4A}
+html,body{margin:0;height:100%;background:var(--bg);overflow:hidden}
+svg{display:block;width:100vw;height:100vh;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+.bg{fill:var(--bg)}.box{fill:var(--box);stroke:var(--line);stroke-width:3}.box.acc{stroke:var(--acc);stroke-width:4}.box.dash{stroke-dasharray:10 8}
+.flap{fill:var(--accsoft);stroke:var(--acc)}
+.lab{font-size:27px;font-weight:700;fill:var(--ink)}.sub{font-size:20px;fill:var(--mut)}.head{font-size:20px;font-weight:700;letter-spacing:.14em;fill:var(--acc)}
+.cap{font-size:64px;font-weight:700;fill:var(--ink)}.foot{font-size:26px;fill:var(--ink)}.foot2{font-size:24px;fill:var(--mut)}.eq{font-size:34px;font-weight:700;fill:var(--ink)}
+.arr{fill:none;stroke:var(--line);stroke-width:4;stroke-linejoin:round}#ah path{fill:var(--line)}
+.chip{fill:var(--box);stroke:var(--ink);stroke-width:3}.chip.on{fill:var(--ink)}.chip.miss{stroke:var(--acc);stroke-width:6}.chip.slot{fill:none;stroke:var(--line);stroke-dasharray:8 6}
+.chiptxt{font-size:26px;font-weight:700;text-anchor:middle;fill:var(--ink)}.chiptxt.on{fill:var(--bg)}.tag{font-size:19px;fill:var(--mut)}.tag.acct{fill:var(--acc);font-weight:700}
+.atbadge{fill:var(--acc)}.attxt{font-size:28px;font-weight:700;fill:var(--bg);text-anchor:middle}
+.frame{fill:var(--bg);fill-opacity:.94;stroke:var(--acc);stroke-width:4;stroke-dasharray:16 10}</style></head><body>
+<svg id="stage" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet"><defs><marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="18" markerHeight="18" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs></svg>
+<script>(function () {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('stage');
+  const $ = (t, a, p) => { const e = document.createElementNS(NS, t); for (const k in (a || {})) e.setAttribute(k, a[k]); if (p) p.appendChild(e); return e; };
+  const clamp = x => Math.max(0, Math.min(1, x));
+  const ease = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+  const P = (t, a, b) => ease(clamp((t - a) / (b - a)));
+  const L = (a, b, p) => a + (b - a) * p;
+  const T = (p, s, x, y, c, anchor) => { const e = $('text', { x, y, class: c, 'text-anchor': anchor || 'middle' }, p); e.textContent = s; return e; };
+  function put(g, o, dx, dy, sc) {
+    dx = dx || 0; dy = dy || 0; sc = sc == null ? 1 : sc;
+    const c = g.__c || [0, 0];
+    g.style.opacity = o;
+    g.setAttribute('transform', `translate(${c[0] + dx} ${c[1] + dy}) scale(${sc}) translate(${-c[0]} ${-c[1]})`);
+  }
+  function box(p, x, y, w, h, label, sub, cls) {
+    const g = $('g', {}, p); g.__c = [x + w / 2, y + h / 2];
+    $('rect', { x, y, width: w, height: h, rx: 18, class: 'box ' + (cls || '') }, g);
+    if (sub) { T(g, label, x + w / 2, y + h / 2 - 6, 'lab'); T(g, sub, x + w / 2, y + h / 2 + 26, 'sub'); }
+    else T(g, label, x + w / 2, y + h / 2 + 9, 'lab');
+    g.style.opacity = 0; return g;
+  }
+  function arrow(p, d) { const e = $('path', { d, pathLength: 1, class: 'arr' }, p); e.style.strokeDasharray = '1'; e.style.opacity = 0; return e; }
+  function draw(e, p) { e.style.strokeDashoffset = 1 - p; e.style.opacity = p > 0 ? 1 : 0; e.setAttribute('marker-end', p > .97 ? 'url(#ah)' : ''); }
+  function head(p, x, s) { const e = T(p, s, x, 188, 'head', 'start'); e.style.opacity = 0; return e; }
+
+  $('rect', { x: 0, y: 0, width: 1920, height: 1080, class: 'bg' }, svg);
+  const cam = $('g', {}, svg), base = $('g', {}, cam), top = $('g', {}, cam), ui = $('g', {}, svg);
+
+  // ---- scene 1: empty files
+  const files1 = [0, 1, 2, 3, 4].map(i => {
+    const g = $('g', {}, base); const x = 560 + i * 160, y = 450; g.__c = [x + 60, y + 75];
+    $('rect', { x, y, width: 120, height: 150, rx: 14, class: 'box dash' }, g); g.style.opacity = 0; return g;
+  });
+  const files1Label = T(base, 'Excel timesheets', 960, 280 + 220, 'sub'); files1Label.style.opacity = 0;
+  files1Label.setAttribute('y', 690);
+
+  // ---- layer headings
+  const hSched = head(base, 80, 'SCHEDULE'), hApps = head(base, 420, 'APPS SCRIPT'), hDrive = head(base, 800, 'DRIVE / EXCEL'),
+    hRules = head(base, 1180, 'RULES'), hChat = head(top, 1560, 'TEAM CHAT');
+
+  // ---- scene 2
+  const clock1 = box(base, 80, 380, 200, 110, '~08:00', 'workdays'), clock2 = box(base, 80, 630, 200, 110, '~16:30', 'workdays');
+  const apps = box(base, 420, 430, 260, 260, 'Apps Script', 'V8, plain JavaScript', 'acc');
+  const a1 = arrow(base, 'M280 435 L420 520'), a2 = arrow(base, 'M280 685 L420 600');
+  const skipNote = T(base, 'weekends skipped', 550, 730, 'sub'); skipNote.style.opacity = 0;
+
+  // ---- scene 3
+  const fileG = [0, 1, 2].map(() => {
+    const g = $('g', {}, base); $('rect', { x: 895, y: 290, width: 70, height: 90, rx: 10, class: 'box' }, g); T(g, 'xlsx', 930, 342, 'sub'); g.style.opacity = 0; return g;
+  });
+  const folder = box(base, 800, 250, 260, 130, 'Team Drive folder', 'current month');
+  const flap = $('rect', { x: 800, y: 228, width: 260, height: 30, rx: 8, class: 'box flap' }, base); flap.style.opacity = 0;
+  const aF = arrow(base, 'M680 520 L740 520 L740 315 L800 315');
+  const parse = box(base, 800, 640, 260, 110, 'Parse', 'unzip, read cached cells');
+  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const chips = days.map((d, i) => {
+    const x = 600 + i * 110, y = 800, g = $('g', {}, base); g.__c = [x + 45, y + 28];
+    const r = $('rect', { x, y, width: 90, height: 56, rx: 14, class: 'chip' + (i < 2 ? ' on' : '') }, g);
+    T(g, d, x + 45, y + 37, 'chiptxt' + (i < 2 ? ' on' : '')); g.style.opacity = 0; return { g, r, x, y };
+  });
+  const tagTxt = { 2: 'holiday', 3: 'day off', 5: 'weekend', 6: 'weekend' };
+  const tags = {}; for (const i in tagTxt) { tags[i] = T(base, tagTxt[i], chips[i].x + 45, 886, 'tag'); tags[i].style.opacity = 0; }
+  const legend = T(base, 'filled = project, start and end time filled in', 975, 945, 'sub'); legend.style.opacity = 0;
+
+  // ---- scene 4
+  const cal = box(base, 1180, 250, 260, 100, 'Holiday calendar', 'feed + manual list');
+  const abs = box(base, 1180, 390, 260, 100, 'Absence sheet', '"off" = day off');
+  const filt = box(base, 1180, 620, 260, 110, 'Day filter', 'weekends, holidays, off', 'acc');
+  const aC = arrow(base, 'M1440 300 H1470 V660 H1440'), aA = arrow(base, 'M1440 440 H1500 V705 H1440'), aD = arrow(base, 'M1310 730 V798');
+  const half = T(base, 'half-day values', 1310, 548, 'sub'), half2 = T(base, 'still need a timesheet', 1310, 576, 'sub');
+  half.style.opacity = half2.style.opacity = 0;
+  const missTag = T(base, 'missing', chips[4].x + 45, 886, 'tag acct'); missTag.style.opacity = 0;
+  const eq = T(base, 'missing days = working days − entered days', 960, 948, 'eq'); eq.style.opacity = 0;
+
+  // ---- scene 5
+  const chat = box(top, 1560, 250, 280, 90, 'Team chat', 'group webhook');
+  const card = $('g', {}, top); card.__c = [1700, 590];
+  $('rect', { x: 1560, y: 400, width: 280, height: 380, rx: 18, class: 'box acc' }, card);
+  T(card, 'Reminder', 1700, 450, 'lab');
+  T(card, 'Missing dates:', 1590, 505, 'sub', 'start');
+  $('rect', { x: 1590, y: 520, width: 100, height: 60, rx: 14, class: 'chip slot' }, card);
+  card.style.opacity = 0;
+  const aT = arrow(top, 'M1700 340 V400');
+  const tagAt = $('g', {}, top); tagAt.__c = [1665, 640];
+  $('rect', { x: 1590, y: 610, width: 150, height: 56, rx: 28, class: 'atbadge' }, tagAt); T(tagAt, '@Name', 1665, 647, 'attxt'); tagAt.style.opacity = 0;
+  const clone = $('g', {}, top); clone.__c = [1085, 828];
+  $('rect', { x: 1040, y: 800, width: 90, height: 56, rx: 14, class: 'chip miss' }, clone); T(clone, 'Fri', 1085, 837, 'chiptxt'); clone.style.opacity = 0;
+  const frame = $('g', {}, top);
+  $('rect', { x: 940, y: 250, width: 560, height: 390, rx: 18, class: 'frame' }, frame);
+  T(frame, 'SCREENSHOT PLACEHOLDER', 1220, 430, 'lab'); T(frame, 'drop your blurred team-chat alert here', 1220, 470, 'sub');
+  frame.style.opacity = 0;
+
+  // ---- ui layer
+  const cap = T(ui, '', 960, 135, 'cap'); const capLines = [[0, 4, 'Who forgot their daily timesheet?'], [4, 9, 'Scheduled check, twice a day'], [9, 15, 'Reads each Excel timesheet in Drive'], [15, 21, 'Skips weekends, holidays, days off'], [21, 26, 'Team chat alert with @mentions'], [26, 31, 'Automated follow-up, no manual checking']];
+  const foot1 = T(ui, 'Morning: checks past days, silent if everyone is up to date  ·  Afternoon: includes today, posts “all OK” if nobody is missing', 960, 1000, 'foot');
+  const foot2 = T(ui, 'Google Apps Script (V8)  ·  Drive  ·  Sheets  ·  Calendar  ·  Teams webhook  ·  No AI / LLM', 960, 1044, 'foot2');
+  foot1.style.opacity = foot2.style.opacity = 0;
+  const archTitle = T(ui, 'Daily Timesheet Compliance Bot — architecture', 960, 120, 'cap'); archTitle.style.opacity = 0;
+
+  function render(t, arch) {
+    const tt = arch ? 25.5 : t; t = tt;
+    // captions
+    let cl = capLines.find(c => t >= c[0] && t < c[1]) || capLines[5];
+    cap.textContent = cl[2];
+    cap.style.opacity = arch ? 0 : Math.min(P(t, cl[0], cl[0] + .5), cl[1] > 30 ? 1 : 1 - P(t, cl[1] - .4, cl[1]));
+    // scene 1
+    files1.forEach((g, i) => { const p = P(t, 1 + i * .4, 1.5 + i * .4); put(g, p * (1 - P(t, 4, 4.8)), 0, (1 - p) * 20, .85 + .15 * p); });
+    files1Label.style.opacity = P(t, 3, 3.5) * (1 - P(t, 4, 4.8));
+    // headings
+    hSched.style.opacity = P(t, 4.4, 5); hApps.style.opacity = P(t, 4.4, 5); hDrive.style.opacity = P(t, 9.2, 9.8);
+    hRules.style.opacity = P(t, 15.2, 15.8); hChat.style.opacity = P(t, 21, 21.6);
+    // scene 2
+    let p = P(t, 4.6, 5.6); put(clock1, p, -300 * (1 - p)); p = P(t, 5, 6); put(clock2, p, -300 * (1 - p));
+    put(apps, P(t, 4.4, 5.2)); draw(a1, P(t, 6, 6.8)); draw(a2, P(t, 6.2, 7)); skipNote.style.opacity = P(t, 7.4, 8);
+    // scene 3
+    const fo = P(t, 9.2, 9.9); put(folder, fo); flap.style.opacity = fo;
+    flap.setAttribute('transform', `rotate(${-7 * P(t, 10.1, 10.8)} 800 258)`);
+    draw(aF, P(t, 9.8, 10.4));
+    fileG.forEach((g, i) => { const s = 10.5 + i * .45, q = P(t, s, s + 1); g.style.opacity = clamp((t - s) / .2) * (1 - P(t, s + .75, s + 1)); g.setAttribute('transform', `translate(0 ${q * 365})`); });
+    put(parse, P(t, 10.6, 11.2));
+    chips.forEach((c, i) => { const s = 12.3 + i * .22, q = P(t, s, s + .6); put(c.g, q, (930 - (c.x + 45)) * (1 - q), -128 * (1 - q), .8 + .2 * q); });
+    legend.style.opacity = P(t, 13.6, 14.2) * (1 - P(t, 14.6, 15));
+    // scene 4
+    put(cal, P(t, 15.3, 16)); put(abs, P(t, 15.7, 16.4)); put(filt, P(t, 16.1, 16.8));
+    draw(aC, P(t, 16.6, 17.2)); draw(aA, P(t, 16.8, 17.4)); draw(aD, P(t, 17.2, 17.7));
+    const gs = { 5: 17.8, 6: 17.9, 2: 18.5, 3: 19.2 };
+    for (const i in gs) { const g = P(t, gs[i], gs[i] + .5); chips[i].g.style.opacity = Math.min(parseFloat(chips[i].g.style.opacity), 1 - .7 * g); tags[i].style.opacity = g; }
+    half.style.opacity = half2.style.opacity = P(t, 19.8, 20.4);
+    const miss = t >= 20.3; chips[4].r.classList.toggle('miss', miss); missTag.style.opacity = P(t, 20.3, 20.8);
+    eq.style.opacity = arch ? 1 : P(t, 20.4, 20.9) * (1 - P(t, 21, 21.4));
+    // scene 5
+    put(chat, P(t, 21, 21.7)); put(card, P(t, 21.2, 21.9)); draw(aT, P(t, 21.5, 21.9));
+    const cp = P(t, 21.8, 22.1), A = P(t, 21.8, 22.2), B = P(t, 22.2, 23), C = P(t, 23, 23.6);
+    const cx = L(1085, 1640, B), cy = L(L(828, 933, A), 550, C);
+    put(clone, cp, cx - 1085, cy - 828);
+    put(tagAt, P(t, 23.2, 23.6), 0, 0, .6 + .4 * P(t, 23.2, 23.6));
+    frame.style.opacity = arch ? 0 : P(t, 23.8, 24.4) * (1 - P(t, 26, 26.6));
+    if (arch) legend.style.opacity = 0;
+    // camera & dimming
+    let s = 1, fx = 960, fy = 540, dim = 1;
+    if (t < 26) { const q = P(t, 20.8, 21.8); s = L(1, 1.15, q); fx = L(960, 1550, q); fy = L(540, 560, q); dim = 1 - .75 * q; }
+    else { const q = P(t, 26, 27.2); s = L(1.15, .9, q); fx = L(1550, 960, q); fy = L(560, 540, q); dim = .25 + .75 * P(t, 26, 26.8); }
+    if (arch) { s = 1; fx = 960; fy = 540; dim = 1; }
+    cam.setAttribute('transform', `translate(${fx} ${fy}) scale(${s}) translate(${-fx} ${-fy})`);
+    base.style.opacity = dim;
+    const hh = 1 - (t < 26 ? P(t, 20.8, 21.8) : 1 - P(t, 26, 26.8));
+    [hSched, hApps, hDrive, hRules].forEach(h => { h.style.opacity = parseFloat(h.style.opacity) * (arch ? 1 : hh); });
+    foot1.style.opacity = foot2.style.opacity = arch ? 1 : P(t, 26.8, 27.6);
+    archTitle.style.opacity = arch ? 1 : 0;
+  }
+  window.__render = render;
+})();
+
+__render(0,true);</script></body></html>
